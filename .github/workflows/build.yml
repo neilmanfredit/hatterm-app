@@ -23,6 +23,8 @@ env:
 jobs:
     build-android:
         runs-on: ubuntu-latest
+        env:
+            HAS_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 != '' }}
         steps:
             - uses: actions/checkout@v4
 
@@ -71,7 +73,7 @@ jobs:
               run: cd android && ./gradlew assembleDebug
 
             - name: Build release AAB (if secrets available)
-              if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+              if: env.HAS_KEYSTORE == 'true'
               env:
                   KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
                   KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -92,7 +94,7 @@ jobs:
                   path: android/app/build/outputs/apk/debug/*.apk
 
             - name: Upload AAB artifact
-              if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+              if: env.HAS_KEYSTORE == 'true'
               uses: actions/upload-artifact@v4
               with:
                   name: hatterm-android-release
