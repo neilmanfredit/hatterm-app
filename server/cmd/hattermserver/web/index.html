@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hatterm Server</title>
+    <style>
+        :root {
+            --bg: #18181b; --surface: #27272a; --border: #3f3f46;
+            --text: #e4e4e7; --muted: #71717a;
+            --accent: #7c3aed; --accent-l: #a855f7;
+            --green: #22c55e; --red: #ef4444; --yellow: #f59e0b;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+        code { font-family: monospace; }
+
+        /* Login */
+        #login { display: none; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
+        .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 40px; width: 100%; max-width: 400px; }
+        .login-card h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+        .login-card p { color: var(--muted); margin-bottom: 24px; font-size: 14px; }
+
+        /* Dashboard */
+        #dashboard { display: none; }
+        header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+        header h1 { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+        .dot { width: 9px; height: 9px; background: var(--green); border-radius: 50%; display: inline-block; flex-shrink: 0; }
+        main { padding: 24px; max-width: 960px; margin: 0 auto; display: grid; gap: 20px; }
+
+        /* Cards */
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+        .card-header { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+        .card-header h2 { font-size: 14px; font-weight: 600; }
+        .card-body { padding: 20px; }
+
+        /* Stats */
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+        .stat { background: var(--bg); border-radius: 8px; padding: 14px; }
+        .stat-value { font-size: 22px; font-weight: 700; color: var(--accent-l); }
+        .stat-label { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+        /* Table */
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; color: var(--muted); font-weight: 500; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
+        td { padding: 10px 16px; border-bottom: 1px solid #2a2a2d; }
+        tr:last-child td { border-bottom: none; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+        .badge-green { background: rgba(34,197,94,.12); color: var(--green); }
+        .badge-red { background: rgba(239,68,68,.12); color: var(--red); }
+
+        /* Forms */
+        .form-row { display: flex; gap: 10px; align-items: center; }
+        input[type=text], input[type=password] {
+            background: var(--bg); border: 1px solid var(--border); color: var(--text);
+            border-radius: 6px; padding: 9px 13px; font-size: 14px; width: 100%; outline: none;
+        }
+        input:focus { border-color: var(--accent); }
+
+        /* Buttons */
+        .btn { border: none; border-radius: 6px; padding: 9px 18px; font-size: 13px; cursor: pointer; font-weight: 500; transition: opacity .1s; white-space: nowrap; }
+        .btn:hover { opacity: .82; }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-secondary { background: var(--border); color: var(--text); }
+        .btn-danger { background: transparent; border: 1px solid var(--red); color: var(--red); }
+        .btn-sm { padding: 5px 11px; font-size: 12px; }
+        .btn-link { background: none; border: none; color: var(--accent-l); cursor: pointer; font-size: 13px; padding: 0; }
+
+        /* Modal */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 100; padding: 24px; }
+        .modal-overlay.open { display: flex; }
+        .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; width: 100%; max-width: 540px; }
+        .modal-header { padding: 18px 22px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+        .modal-header h3 { font-size: 15px; font-weight: 600; }
+        .modal-body { padding: 22px; }
+        .modal-footer { padding: 14px 22px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; }
+        pre.code {
+            background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+            padding: 14px; font-size: 12px; overflow: auto; max-height: 220px;
+            color: #a3e635; line-height: 1.5;
+        }
+
+        /* Misc */
+        .error { color: var(--red); font-size: 13px; margin-top: 10px; min-height: 18px; }
+        .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 24px 16px; }
+        .text-muted { color: var(--muted); }
+        .text-sm { font-size: 12px; }
+    </style>
+</head>
+<body>
+
+<div id="login">
+    <div class="login-card">
+        <h1>Hatterm Server</h1>
+        <p>Enter your admin token to manage this server.</p>
+        <input type="password" id="login-token" placeholder="adm_..." autocomplete="off">
+        <div style="margin-top:14px">
+            <button class="btn btn-primary" style="width:100%" onclick="login()">Connect</button>
+        </div>
+        <div class="error" id="login-error"></div>
+    </div>
+</div>
+
+<div id="dashboard">
+    <header>
+        <h1><span class="dot"></span> <span id="hdr-name">Hatterm Server</span></h1>
+        <div style="display:flex;gap:12px;align-items:center">
+            <span class="text-muted text-sm" id="hdr-uptime"></span>
+            <button class="btn btn-secondary btn-sm" onclick="logout()">Sign out</button>
+        </div>
+    </header>
+    <main>
+
+        <div class="card">
+            <div class="card-header">
+                <h2>Server Status</h2>
+                <button class="btn-link" onclick="loadStatus()">Refresh</button>
+            </div>
+            <div class="card-body">
+                <div class="stats">
+                    <div class="stat"><div class="stat-value" id="st-sessions">-</div><div class="stat-label">Active sessions</div></div>
+                    <div class="stat"><div class="stat-value" id="st-tokens">-</div><div class="stat-label">Tokens</div></div>
+                    <div class="stat"><div class="stat-value" id="st-uptime">-</div><div class="stat-label">Uptime</div></div>
+                    <div class="stat"><div class="stat-value" id="st-addr" style="font-size:13px;padding-top:5px">-</div><div class="stat-label">Listen address</div></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><h2>Generate Pairing Link</h2></div>
+            <div class="card-body">
+                <p class="text-muted text-sm" style="margin-bottom:16px">
+                    Generate a <code>.hattermlink</code> file to import into the Hatterm Android app. Each link contains a unique session token.
+                </p>
+                <div class="form-row">
+                    <input type="text" id="pair-name" placeholder="Device name (e.g. My Phone)" style="max-width:260px">
+                    <input type="text" id="pair-url" placeholder="WebSocket URL override (optional)">
+                    <button class="btn btn-primary" onclick="generatePairing()">Generate</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h2>Active Sessions</h2>
+                <button class="btn-link" onclick="loadSessions()">Refresh</button>
+            </div>
+            <table>
+                <thead><tr><th>Session ID</th><th>Token</th><th>Started</th></tr></thead>
+                <tbody id="sessions-body"><tr><td colspan="3" class="empty">No active sessions</td></tr></tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><h2>Tokens</h2></div>
+            <div class="card-body" style="padding-bottom:16px">
+                <div class="form-row">
+                    <input type="text" id="new-tok-name" placeholder="Token name" style="max-width:280px">
+                    <button class="btn btn-secondary" onclick="createToken()">Create token</button>
+                </div>
+            </div>
+            <table>
+                <thead><tr><th>Name</th><th>ID</th><th>Created</th><th>Last used</th><th>Status</th><th></th></tr></thead>
+                <tbody id="tokens-body"><tr><td colspan="6" class="empty">No tokens</td></tr></tbody>
+            </table>
+        </div>
+
+    </main>
+</div>
+
+<div class="modal-overlay" id="pairing-modal" onclick="if(event.target===this)closePairing()">
+    <div class="modal">
+        <div class="modal-header">
+            <h3>Pairing Link Ready</h3>
+            <button class="btn-link" style="font-size:20px;line-height:1" onclick="closePairing()">×</button>
+        </div>
+        <div class="modal-body">
+            <p class="text-muted text-sm" style="margin-bottom:12px">
+                Import this file into the Hatterm Android app, or copy the JSON and paste it manually.
+            </p>
+            <pre class="code" id="pairing-json"></pre>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="copyPairing()">Copy JSON</button>
+            <button class="btn btn-primary" onclick="downloadPairing()">Download .hattermlink</button>
+            <button class="btn btn-secondary" onclick="closePairing()">Close</button>
+        </div>
+    </div>
+</div>
+
+<script>
+let adminToken = '';
+let pairingData = null;
+let pairingDevName = '';
+let refreshTimer = null;
+
+function fmtUptime(s) {
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60), sec = s % 60;
+    if (d > 0) return d + 'd ' + h + 'h';
+    if (h > 0) return h + 'h ' + m + 'm';
+    if (m > 0) return m + 'm ' + sec + 's';
+    return sec + 's';
+}
+
+function fmtDate(iso) {
+    if (!iso || iso === '0001-01-01T00:00:00Z') return '—';
+    const d = new Date(iso);
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+
+async function apiFetch(path, method, body) {
+    const opts = {
+        method: method || 'GET',
+        headers: { 'Authorization': 'Bearer ' + adminToken, 'Content-Type': 'application/json' }
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const r = await fetch(path, opts);
+    if (r.status === 204) return null;
+    if (!r.ok) throw new Error(r.status + ': ' + await r.text());
+    return r.json();
+}
+
+async function login() {
+    const tok = document.getElementById('login-token').value.trim();
+    document.getElementById('login-error').textContent = '';
+    if (!tok) return;
+    adminToken = tok;
+    try {
+        await apiFetch('/admin/api/status');
+        sessionStorage.setItem('hatterm_tok', tok);
+        showDashboard();
+    } catch {
+        document.getElementById('login-error').textContent = 'Invalid token or server unreachable.';
+        adminToken = '';
+    }
+}
+
+function logout() {
+    sessionStorage.removeItem('hatterm_tok');
+    adminToken = '';
+    clearInterval(refreshTimer);
+    document.getElementById('dashboard').style.display = 'none';
+    document.getElementById('login').style.display = 'flex';
+}
+
+function showDashboard() {
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+    loadAll();
+    refreshTimer = setInterval(() => { loadStatus(); loadSessions(); }, 15000);
+}
+
+function loadAll() { loadStatus(); loadSessions(); loadTokens(); }
+
+async function loadStatus() {
+    try {
+        const s = await apiFetch('/admin/api/status');
+        document.getElementById('hdr-name').textContent = s.servername;
+        document.getElementById('hdr-uptime').textContent = 'up ' + fmtUptime(s.uptimesecs);
+        document.getElementById('st-sessions').textContent = s.sessioncount;
+        document.getElementById('st-tokens').textContent = s.tokencount;
+        document.getElementById('st-uptime').textContent = fmtUptime(s.uptimesecs);
+        document.getElementById('st-addr').textContent = s.listenaddr;
+    } catch {}
+}
+
+async function loadSessions() {
+    try {
+        const list = await apiFetch('/admin/api/sessions');
+        const tbody = document.getElementById('sessions-body');
+        if (!list || !list.length) {
+            tbody.innerHTML = '<tr><td colspan="3" class="empty">No active sessions</td></tr>';
+            return;
+        }
+        tbody.innerHTML = list.map(s =>
+            `<tr><td><code>${s.id}</code></td><td><code class="text-muted text-sm">${s.tokenid||'—'}</code></td><td class="text-muted text-sm">${fmtDate(s.createdat)}</td></tr>`
+        ).join('');
+    } catch {}
+}
+
+async function loadTokens() {
+    try {
+        const list = await apiFetch('/admin/api/tokens');
+        const tbody = document.getElementById('tokens-body');
+        if (!list || !list.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="empty">No tokens</td></tr>';
+            return;
+        }
+        list.sort((a, b) => new Date(b.createdat) - new Date(a.createdat));
+        tbody.innerHTML = list.map(t =>
+            `<tr>
+                <td>${t.name||'—'}</td>
+                <td><code class="text-sm text-muted">${t.id}</code></td>
+                <td class="text-muted text-sm">${fmtDate(t.createdat)}</td>
+                <td class="text-muted text-sm">${fmtDate(t.lastused)}</td>
+                <td><span class="badge ${t.revoked?'badge-red':'badge-green'}">${t.revoked?'Revoked':'Active'}</span></td>
+                <td>${t.revoked?'':'<button class="btn btn-danger btn-sm" onclick="revokeToken(\''+t.id+'\')">Revoke</button>'}</td>
+            </tr>`
+        ).join('');
+    } catch {}
+}
+
+async function createToken() {
+    const name = document.getElementById('new-tok-name').value.trim();
+    if (!name) return;
+    try {
+        await apiFetch('/admin/api/tokens', 'POST', { name });
+        document.getElementById('new-tok-name').value = '';
+        loadTokens();
+        loadStatus();
+    } catch (e) { alert('Failed: ' + e.message); }
+}
+
+async function revokeToken(id) {
+    if (!confirm('Revoke this token? Apps using it will be disconnected.')) return;
+    try {
+        await apiFetch('/admin/api/tokens/' + id, 'DELETE');
+        loadTokens();
+        loadStatus();
+    } catch (e) { alert('Failed: ' + e.message); }
+}
+
+async function generatePairing() {
+    const name = document.getElementById('pair-name').value.trim() || 'Mobile Device';
+    const wsurl = document.getElementById('pair-url').value.trim() || null;
+    try {
+        const data = await apiFetch('/admin/api/pairing', 'POST', { name, wsurl: wsurl || undefined });
+        pairingData = data;
+        pairingDevName = name;
+        document.getElementById('pairing-json').textContent = JSON.stringify(data, null, 2);
+        document.getElementById('pairing-modal').classList.add('open');
+        loadTokens();
+        loadStatus();
+    } catch (e) { alert('Failed: ' + e.message); }
+}
+
+function closePairing() {
+    document.getElementById('pairing-modal').classList.remove('open');
+}
+
+function copyPairing() {
+    navigator.clipboard.writeText(JSON.stringify(pairingData, null, 2));
+}
+
+function downloadPairing() {
+    const blob = new Blob([JSON.stringify(pairingData, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'hatterm-' + pairingDevName.toLowerCase().replace(/\s+/g, '-') + '.hattermlink';
+    a.click();
+}
+
+(function init() {
+    const saved = sessionStorage.getItem('hatterm_tok');
+    if (saved) {
+        adminToken = saved;
+        document.getElementById('dashboard').style.display = 'block';
+        loadAll();
+        refreshTimer = setInterval(() => { loadStatus(); loadSessions(); }, 15000);
+    } else {
+        document.getElementById('login').style.display = 'flex';
+        document.getElementById('login-token').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+    }
+})();
+</script>
+</body>
+</html>

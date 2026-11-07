@@ -5,22 +5,54 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ServerConfig } from "./types";
+
+type ConnState = "connecting" | "connected" | "reconnecting" | "disconnected";
 
 interface TerminalViewProps {
     server: ServerConfig;
     onDisconnect: () => void;
 }
 
+const IndicatorColor: Record<ConnState, string> = {
+    connecting: "#f59e0b",
+    connected: "#22c55e",
+    reconnecting: "#f59e0b",
+    disconnected: "#ef4444",
+};
+
+const StateLabel: Record<ConnState, string> = {
+    connecting: "Connecting…",
+    connected: "",
+    reconnecting: "Reconnecting…",
+    disconnected: "Disconnected",
+};
+
 export function TerminalView({ server, onDisconnect }: TerminalViewProps) {
     const containerRef = useRef<HTMLDivElement>(null);
-    const termRef = useRef<Terminal | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
-    const fitAddonRef = useRef<FitAddon | null>(null);
+    const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const reconnectAttemptsRef = useRef(0);
+    const connectFnRef = useRef<(() => void) | null>(null);
+    const [connState, setConnState] = useState<ConnState>("connecting");
+
+    const reconnectNow = useCallback(() => {
+        if (reconnectTimerRef.current != null) {
+            clearTimeout(reconnectTimerRef.current);
+            reconnectTimerRef.current = null;
+        }
+        reconnectAttemptsRef.current = 0;
+        wsRef.current?.close();
+        connectFnRef.current?.();
+    }, []);
 
     useEffect(() => {
         if (!containerRef.current) return;
+
+        reconnectAttemptsRef.current = 0;
+        let destroyed = false;
+        let isFirstConnect = true;
 
         const term = new Terminal({
             theme: {
@@ -54,78 +86,99 @@ export function TerminalView({ server, onDisconnect }: TerminalViewProps) {
         });
 
         const fitAddon = new FitAddon();
-        const webLinksAddon = new WebLinksAddon();
         term.loadAddon(fitAddon);
-        term.loadAddon(webLinksAddon);
+        term.loadAddon(new WebLinksAddon());
         term.open(containerRef.current);
         fitAddon.fit();
-        termRef.current = term;
-        fitAddonRef.current = fitAddon;
 
-        // Connect via WebSocket to the hatterm server
-        const ws = new WebSocket(`${server.url}/wshrpc?token=${encodeURIComponent(server.token)}`);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-            term.writeln("\x1b[32mConnected to hatterm server\x1b[0m");
-            term.writeln(`\x1b[90m${server.url}\x1b[0m`);
-            term.writeln("");
-            // Request a new shell session
-            const initMsg = JSON.stringify({
-                reqid: crypto.randomUUID(),
-                command: "openterm",
-                data: { cols: term.cols, rows: term.rows },
-            });
-            ws.send(initMsg);
-        };
-
-        ws.onmessage = (evt) => {
-            try {
-                const msg = JSON.parse(evt.data);
-                if (msg.data?.output) {
-                    term.write(msg.data.output);
-                }
-            } catch {
-                // raw data fallback
-                term.write(evt.data);
-            }
-        };
-
-        ws.onerror = () => {
-            term.writeln("\x1b[31mConnection error\x1b[0m");
-        };
-
-        ws.onclose = () => {
-            term.writeln("\x1b[33m\r\nDisconnected from server\x1b[0m");
-        };
-
-        // Send terminal input to server
         term.onData((data) => {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ command: "input", data: { input: data } }));
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ type: "input", data: { input: data } }));
             }
         });
 
-        // Send resize events
         term.onResize(({ cols, rows }) => {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ command: "resize", data: { cols, rows } }));
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ type: "resize", data: { cols, rows } }));
             }
         });
 
-        const resizeObserver = new ResizeObserver(() => {
-            requestAnimationFrame(() => fitAddon.fit());
-        });
+        const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => fitAddon.fit()));
         resizeObserver.observe(containerRef.current);
 
+        function connect() {
+            if (destroyed) return;
+            setConnState("connecting");
+
+            const ws = new WebSocket(`${server.url}/ws?token=${encodeURIComponent(server.token)}`);
+            wsRef.current = ws;
+
+            ws.onopen = () => {
+                if (destroyed) {
+                    ws.close();
+                    return;
+                }
+                setConnState("connected");
+                if (isFirstConnect) {
+                    isFirstConnect = false;
+                    term.writeln(`\x1b[32mConnected to ${server.name}\x1b[0m`);
+                    term.writeln(`\x1b[90m${server.url}\x1b[0m\r\n`);
+                } else {
+                    reconnectAttemptsRef.current = 0;
+                    term.writeln("\x1b[32m\r\n[Reconnected]\x1b[0m\r\n");
+                }
+                ws.send(JSON.stringify({ type: "resize", data: { cols: term.cols, rows: term.rows } }));
+            };
+
+            ws.onmessage = (evt) => {
+                if (destroyed) return;
+                try {
+                    const msg = JSON.parse(evt.data as string);
+                    if (msg.type === "output" && msg.data?.output) {
+                        term.write(msg.data.output);
+                    } else if (msg.type === "error" && msg.data?.message) {
+                        term.writeln(`\x1b[31m[Server: ${msg.data.message}]\x1b[0m`);
+                    }
+                } catch {
+                    term.write(evt.data as string);
+                }
+            };
+
+            ws.onclose = () => {
+                wsRef.current = null;
+                if (destroyed) return;
+
+                term.writeln("\x1b[33m\r\n[Connection lost]\x1b[0m");
+
+                const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+                reconnectAttemptsRef.current++;
+                setConnState("reconnecting");
+                term.writeln(`\x1b[90m[Reconnecting in ${Math.round(delay / 1000)}s…]\x1b[0m`);
+
+                reconnectTimerRef.current = setTimeout(() => {
+                    if (!destroyed) connect();
+                }, delay);
+            };
+        }
+
+        connectFnRef.current = connect;
+        connect();
+
         return () => {
+            destroyed = true;
+            connectFnRef.current = null;
+            if (reconnectTimerRef.current != null) {
+                clearTimeout(reconnectTimerRef.current);
+                reconnectTimerRef.current = null;
+            }
             resizeObserver.disconnect();
-            ws.close();
-            term.dispose();
-            termRef.current = null;
+            wsRef.current?.close();
             wsRef.current = null;
+            term.dispose();
         };
     }, [server]);
+
+    const showReconnect = connState === "reconnecting" || connState === "disconnected";
 
     return (
         <div
@@ -137,7 +190,6 @@ export function TerminalView({ server, onDisconnect }: TerminalViewProps) {
                 overflow: "hidden",
             }}
         >
-            {/* Terminal toolbar */}
             <div
                 style={{
                     display: "flex",
@@ -147,34 +199,70 @@ export function TerminalView({ server, onDisconnect }: TerminalViewProps) {
                     background: "#27272a",
                     borderBottom: "1px solid #3f3f46",
                     flexShrink: 0,
+                    gap: 8,
                 }}
             >
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                     <div
                         style={{
                             width: 8,
                             height: 8,
                             borderRadius: "50%",
-                            background: "#22c55e",
+                            background: IndicatorColor[connState],
+                            flexShrink: 0,
                         }}
                     />
-                    <span style={{ color: "#a1a1aa", fontSize: 12, fontFamily: "monospace" }}>{server.name}</span>
+                    <span
+                        style={{
+                            color: "#a1a1aa",
+                            fontSize: 12,
+                            fontFamily: "monospace",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                        }}
+                    >
+                        {server.name}
+                    </span>
+                    {StateLabel[connState] && (
+                        <span style={{ color: "#71717a", fontSize: 11, whiteSpace: "nowrap" }}>
+                            {StateLabel[connState]}
+                        </span>
+                    )}
                 </div>
-                <button
-                    onClick={onDisconnect}
-                    style={{
-                        background: "none",
-                        color: "#71717a",
-                        fontSize: 12,
-                        padding: "4px 8px",
-                        borderRadius: 4,
-                    }}
-                >
-                    ✕ Disconnect
-                </button>
+                <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                    {showReconnect && (
+                        <button
+                            onClick={reconnectNow}
+                            style={{
+                                background: "none",
+                                color: "#a855f7",
+                                fontSize: 12,
+                                padding: "4px 8px",
+                                borderRadius: 4,
+                                border: "1px solid #a855f7",
+                                cursor: "pointer",
+                            }}
+                        >
+                            Reconnect now
+                        </button>
+                    )}
+                    <button
+                        onClick={onDisconnect}
+                        style={{
+                            background: "none",
+                            color: "#71717a",
+                            fontSize: 12,
+                            padding: "4px 8px",
+                            borderRadius: 4,
+                            border: "none",
+                            cursor: "pointer",
+                        }}
+                    >
+                        ✕ Disconnect
+                    </button>
+                </div>
             </div>
-
-            {/* xterm container */}
             <div ref={containerRef} style={{ flex: 1, overflow: "hidden", minHeight: 0 }} />
         </div>
     );

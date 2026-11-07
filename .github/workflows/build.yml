@@ -1,12 +1,13 @@
 # Copyright 2026 Neil Manfred
 # SPDX-License-Identifier: Apache-2.0
 #
-# Builds the Hatterm Android APK and AAB on version tags (v*) and manual dispatch.
-# Signed debug APK is attached to workflow artifacts.
-# Release builds require KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS,
-# KEY_PASSWORD secrets to be set for release signing.
+# Builds the Hatterm Android APK/AAB and the hattermserver Go binaries on
+# version tags (v*) and manual dispatch.
+#
+# Release signing requires KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS,
+# KEY_PASSWORD secrets to be set.
 
-name: Build Android
+name: Build
 
 on:
     push:
@@ -17,9 +18,10 @@ on:
 env:
     NODE_VERSION: 22
     JAVA_VERSION: 21
+    GO_VERSION: "1.23"
 
 jobs:
-    build:
+    build-android:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
@@ -96,14 +98,44 @@ jobs:
                   name: hatterm-android-release
                   path: android/app/build/outputs/bundle/release/*.aab
 
+    build-server:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-go@v5
+              with:
+                  go-version: ${{ env.GO_VERSION }}
+                  cache-dependency-path: server/go.sum
+
+            - name: Download Go dependencies
+              working-directory: server
+              run: go mod download
+
+            - name: Build server binaries
+              working-directory: server
+              run: |
+                  mkdir -p ../dist
+                  GOOS=linux   GOARCH=amd64 go build -trimpath -o ../dist/hattermserver-linux-amd64       ./cmd/hattermserver
+                  GOOS=linux   GOARCH=arm64 go build -trimpath -o ../dist/hattermserver-linux-arm64       ./cmd/hattermserver
+                  GOOS=darwin  GOARCH=amd64 go build -trimpath -o ../dist/hattermserver-macos-amd64      ./cmd/hattermserver
+                  GOOS=darwin  GOARCH=arm64 go build -trimpath -o ../dist/hattermserver-macos-arm64      ./cmd/hattermserver
+                  GOOS=windows GOARCH=amd64 go build -trimpath -o ../dist/hattermserver-windows-amd64.exe ./cmd/hattermserver
+
+            - name: Upload server artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: hatterm-server
+                  path: dist/
+
     release:
         runs-on: ubuntu-latest
-        needs: build
+        needs: [build-android, build-server]
         permissions:
             contents: write
         if: startsWith(github.ref, 'refs/tags/')
         steps:
-            - name: Download artifacts
+            - name: Download all artifacts
               uses: actions/download-artifact@v4
               with:
                   path: artifacts
@@ -113,9 +145,10 @@ jobs:
               uses: softprops/action-gh-release@v2
               with:
                   prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
-                  name: Hatterm Android ${{ github.ref_name }}
+                  name: Hatterm ${{ github.ref_name }}
                   generate_release_notes: true
                   draft: true
                   files: |
                       artifacts/*.apk
                       artifacts/*.aab
+                      artifacts/hattermserver-*
