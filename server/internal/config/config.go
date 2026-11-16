@@ -37,6 +37,8 @@ func ConfigPath() string {
 	return filepath.Join(DefaultDataDir(), "config.json")
 }
 
+// Load reads config.json from DataDir. After loading, environment variable
+// overrides are applied: HATTERM_LISTEN_ADDR, HATTERM_DATA_DIR, HATTERM_SERVER_NAME.
 func Load() (*Config, bool, error) {
 	path := ConfigPath()
 	data, err := os.ReadFile(path)
@@ -50,7 +52,20 @@ func Load() (*Config, bool, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, false, fmt.Errorf("parsing config: %w", err)
 	}
+	applyEnvOverrides(&cfg)
 	return &cfg, true, nil
+}
+
+func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("HATTERM_LISTEN_ADDR"); v != "" {
+		cfg.ListenAddr = v
+	}
+	if v := os.Getenv("HATTERM_DATA_DIR"); v != "" {
+		cfg.DataDir = v
+	}
+	if v := os.Getenv("HATTERM_SERVER_NAME"); v != "" {
+		cfg.ServerName = v
+	}
 }
 
 func Save(cfg *Config) error {
@@ -73,12 +88,14 @@ func MakeDefault() (*Config, error) {
 	if hostname == "" {
 		hostname = "hattermserver"
 	}
-	return &Config{
+	cfg := &Config{
 		ListenAddr: "127.0.0.1:" + DefaultPort,
 		DataDir:    DefaultDataDir(),
 		AdminToken: adminToken,
 		ServerName: hostname,
-	}, nil
+	}
+	applyEnvOverrides(cfg)
+	return cfg, nil
 }
 
 func generateToken(prefix string) (string, error) {
