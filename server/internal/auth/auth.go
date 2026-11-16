@@ -124,5 +124,10 @@ func (s *Store) saveLocked() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(s.dataDir, tokenFile), data, 0600)
+	dest := filepath.Join(s.dataDir, tokenFile)
+	tmp := dest + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dest)
 }

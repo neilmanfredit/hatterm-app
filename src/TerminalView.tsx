@@ -24,9 +24,16 @@ const IndicatorColor: Record<ConnState, string> = {
 
 const StateLabel: Record<ConnState, string> = {
     connecting: "Connecting…",
-    connected: "",
+    connected: "Connected",
     reconnecting: "Reconnecting…",
     disconnected: "Disconnected",
+};
+
+const StateShape: Record<ConnState, string> = {
+    connecting: "◔",
+    connected: "●",
+    reconnecting: "◔",
+    disconnected: "○",
 };
 
 export function TerminalView({ server, onDisconnect }: TerminalViewProps) {
@@ -110,7 +117,7 @@ export function TerminalView({ server, onDisconnect }: TerminalViewProps) {
             if (destroyed) return;
             setConnState("connecting");
 
-            const ws = new WebSocket(`${server.url}/ws?token=${encodeURIComponent(server.token)}`);
+            const ws = new WebSocket(`${server.url}/ws`);
             wsRef.current = ws;
 
             ws.onopen = () => {
@@ -118,23 +125,26 @@ export function TerminalView({ server, onDisconnect }: TerminalViewProps) {
                     ws.close();
                     return;
                 }
-                setConnState("connected");
-                if (isFirstConnect) {
-                    isFirstConnect = false;
-                    term.writeln(`\x1b[32mConnected to ${server.name}\x1b[0m`);
-                    term.writeln(`\x1b[90m${server.url}\x1b[0m\r\n`);
-                } else {
-                    reconnectAttemptsRef.current = 0;
-                    term.writeln("\x1b[32m\r\n[Reconnected]\x1b[0m\r\n");
-                }
-                ws.send(JSON.stringify({ type: "resize", data: { cols: term.cols, rows: term.rows } }));
+                // Send auth as first message; server will respond with "connected" on success.
+                ws.send(JSON.stringify({ type: "auth", data: { token: server.token } }));
             };
 
             ws.onmessage = (evt) => {
                 if (destroyed) return;
                 try {
                     const msg = JSON.parse(evt.data as string);
-                    if (msg.type === "output" && msg.data?.output) {
+                    if (msg.type === "connected") {
+                        setConnState("connected");
+                        if (isFirstConnect) {
+                            isFirstConnect = false;
+                            term.writeln(`\x1b[32mConnected to ${server.name}\x1b[0m`);
+                            term.writeln(`\x1b[90m${server.url}\x1b[0m\r\n`);
+                        } else {
+                            reconnectAttemptsRef.current = 0;
+                            term.writeln("\x1b[32m\r\n[Reconnected]\x1b[0m\r\n");
+                        }
+                        ws.send(JSON.stringify({ type: "resize", data: { cols: term.cols, rows: term.rows } }));
+                    } else if (msg.type === "output" && msg.data?.output) {
                         term.write(msg.data.output);
                     } else if (msg.type === "error" && msg.data?.message) {
                         term.writeln(`\x1b[31m[Server: ${msg.data.message}]\x1b[0m`);
@@ -203,15 +213,12 @@ export function TerminalView({ server, onDisconnect }: TerminalViewProps) {
                 }}
             >
                 <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                    <div
-                        style={{
-                            width: 8,
-                            height: 8,
-                            borderRadius: "50%",
-                            background: IndicatorColor[connState],
-                            flexShrink: 0,
-                        }}
-                    />
+                    <span
+                        aria-hidden="true"
+                        style={{ color: IndicatorColor[connState], fontSize: 10, flexShrink: 0 }}
+                    >
+                        {StateShape[connState]}
+                    </span>
                     <span
                         style={{
                             color: "#a1a1aa",
@@ -224,11 +231,12 @@ export function TerminalView({ server, onDisconnect }: TerminalViewProps) {
                     >
                         {server.name}
                     </span>
-                    {StateLabel[connState] && (
-                        <span style={{ color: "#71717a", fontSize: 11, whiteSpace: "nowrap" }}>
-                            {StateLabel[connState]}
-                        </span>
-                    )}
+                    <span
+                        aria-live="polite"
+                        style={{ color: "#71717a", fontSize: 11, whiteSpace: "nowrap" }}
+                    >
+                        {StateLabel[connState]}
+                    </span>
                 </div>
                 <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
                     {showReconnect && (

@@ -5,7 +5,6 @@ package pairing
 
 import (
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -56,12 +55,6 @@ func certFingerprint(certFile string) (string, error) {
 	if block == nil {
 		return "", fmt.Errorf("no PEM block found")
 	}
-	cert, err := tls.X509KeyPair(data, data)
-	if err != nil {
-		// Just hash the raw DER bytes
-		sum := sha256.Sum256(block.Bytes)
-		return fmt.Sprintf("%x", sum), nil
-	}
-	sum := sha256.Sum256(cert.Certificate[0])
+	sum := sha256.Sum256(block.Bytes)
 	return fmt.Sprintf("%x", sum), nil
 }

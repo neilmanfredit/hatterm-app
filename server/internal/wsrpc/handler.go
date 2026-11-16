@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -17,6 +18,7 @@ import (
 )
 
 const (
+	MsgAuth      = "auth"
 	MsgInput     = "input"
 	MsgResize    = "resize"
 	MsgOutput    = "output"
@@ -26,6 +28,7 @@ const (
 	MsgPong      = "pong"
 
 	writeTimeout = 10 * time.Second
+	authTimeout  = 10 * time.Second
 	pongWait     = 60 * time.Second
 	pingInterval = 30 * time.Second
 	maxMsgSize   = 128 * 1024
@@ -34,6 +37,10 @@ const (
 type Message struct {
 	Type string          `json:"type"`
 	Data json.RawMessage `json:"data,omitempty"`
+}
+
+type AuthData struct {
+	Token string `json:"token"`
 }
 
 type InputData struct {
@@ -49,40 +56,73 @@ type OutputData struct {
 	Output string `json:"output"`
 }
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  4096,
-	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
-}
-
 type Handler struct {
-	tokens   *auth.Store
-	sessions *terminal.Manager
+	tokens          *auth.Store
+	sessions        *terminal.Manager
+	allowedOrigins  []string
 }
 
-func MakeHandler(tokens *auth.Store, sessions *terminal.Manager) *Handler {
-	return &Handler{tokens: tokens, sessions: sessions}
+func MakeHandler(tokens *auth.Store, sessions *terminal.Manager, allowedOrigins []string) *Handler {
+	return &Handler{tokens: tokens, sessions: sessions, allowedOrigins: allowedOrigins}
+}
+
+func (h *Handler) checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	// Native Capacitor apps send no Origin header; allow empty.
+	if origin == "" || origin == "null" {
+		return true
+	}
+	// Strip scheme for comparison.
+	bare := strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://")
+	bare = strings.TrimPrefix(bare, "capacitor://")
+	bare = strings.SplitN(bare, "/", 2)[0] // strip path/port suffix for loose match
+
+	for _, allowed := range h.allowedOrigins {
+		if strings.EqualFold(origin, allowed) || strings.EqualFold(bare, allowed) {
+			return true
+		}
+	}
+	log.Printf("wsrpc: rejected origin %q (allowed: %v)", origin, h.allowedOrigins)
+	return false
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		token = r.Header.Get("Authorization")
-		if len(token) > 7 && token[:7] == "Bearer " {
-			token = token[7:]
-		}
+	upgrader := websocket.Upgrader{
+		ReadBufferSize:  4096,
+		WriteBufferSize: 4096,
+		CheckOrigin:     h.checkOrigin,
 	}
-
-	if !h.tokens.Validate(token) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("wsrpc: upgrade error: %v", err)
 		return
 	}
+
+	// First message must be an auth frame within authTimeout.
+	conn.SetReadDeadline(time.Now().Add(authTimeout))
+	conn.SetReadLimit(1024)
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		sendError(conn, "auth timeout")
+		conn.Close()
+		return
+	}
+	var msg Message
+	if err := json.Unmarshal(raw, &msg); err != nil || msg.Type != MsgAuth {
+		sendError(conn, "expected auth message")
+		conn.Close()
+		return
+	}
+	var ad AuthData
+	if err := json.Unmarshal(msg.Data, &ad); err != nil || !h.tokens.Validate(ad.Token) {
+		sendError(conn, "unauthorized")
+		conn.Close()
+		return
+	}
+
+	// Auth passed — restore normal read limits.
+	conn.SetReadDeadline(time.Time{})
+	conn.SetReadLimit(maxMsgSize)
 
 	sessionID := newID()
 	sess, err := h.sessions.New(sessionID, "", terminal.DefaultCols, terminal.DefaultRows)
@@ -128,7 +168,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	conn.SetReadLimit(maxMsgSize)
 	conn.SetReadDeadline(time.Now().Add(pongWait))
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(pongWait))

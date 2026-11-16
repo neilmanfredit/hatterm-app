@@ -38,9 +38,17 @@ func MakeManager() *Manager {
 	return &Manager{sessions: make(map[string]*Session)}
 }
 
+func validShell(s string) bool {
+	if s == "" || s[0] != '/' {
+		return false
+	}
+	fi, err := os.Stat(s)
+	return err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
+}
+
 func (m *Manager) New(id, tokenID string, cols, rows uint16) (*Session, error) {
 	shell := os.Getenv("SHELL")
-	if shell == "" {
+	if !validShell(shell) {
 		shell = DefaultShell
 	}
 

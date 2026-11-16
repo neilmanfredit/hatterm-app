@@ -74,7 +74,7 @@ func MakeDefault() (*Config, error) {
 		hostname = "hattermserver"
 	}
 	return &Config{
-		ListenAddr: ":" + DefaultPort,
+		ListenAddr: "127.0.0.1:" + DefaultPort,
 		DataDir:    DefaultDataDir(),
 		AdminToken: adminToken,
 		ServerName: hostname,

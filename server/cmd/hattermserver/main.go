@@ -48,10 +48,11 @@ func main() {
 		if err := config.Save(cfg); err != nil {
 			log.Fatalf("saving config: %v", err)
 		}
-		fmt.Printf("\n=== First run: hattermserver ===\n")
-		fmt.Printf("Config file : %s\n", config.ConfigPath())
-		fmt.Printf("Admin token : %s\n\n", cfg.AdminToken)
-		fmt.Printf("Open https://<your-ip>%s/admin/ in a browser to manage this server.\n\n", cfg.ListenAddr)
+		fmt.Fprintf(os.Stderr, "\n=== First run: hattermserver ===\n")
+		fmt.Fprintf(os.Stderr, "Config file : %s\n", config.ConfigPath())
+		fmt.Fprintf(os.Stderr, "Admin token : %s\n\n", cfg.AdminToken)
+		fmt.Fprintf(os.Stderr, "Open https://localhost%s/admin/ in a browser to manage this server.\n", cfg.ListenAddr)
+		fmt.Fprintf(os.Stderr, "To allow remote access set listenaddr to your LAN/WireGuard IP in config.json.\n\n")
 	}
 
 	tokens, err := auth.MakeStore(cfg.DataDir)
@@ -65,17 +66,25 @@ func main() {
 		log.Fatalf("tls: %v", err)
 	}
 
+	allowedOrigins := []string{"localhost", "127.0.0.1", "::1"}
+	if cfg.Domain != "" {
+		allowedOrigins = append(allowedOrigins, cfg.Domain)
+	}
+	if cfg.ServerName != "" {
+		allowedOrigins = append(allowedOrigins, cfg.ServerName)
+	}
+
 	mux := http.NewServeMux()
 
-	// PTY WebSocket endpoint (app-token auth is handled by wsrpc.Handler)
-	mux.Handle("/ws", wsrpc.MakeHandler(tokens, sessions))
+	// PTY WebSocket — first-message auth (see wsrpc.Handler)
+	mux.Handle("/ws", wsrpc.MakeHandler(tokens, sessions, allowedOrigins))
 
-	// Admin UI (SPA catch-all, no auth — token entered in-browser)
-	mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
+	// Admin UI — restricted to loopback connections only
+	mux.HandleFunc("/admin/", loopbackOnly(func(w http.ResponseWriter, r *http.Request) {
 		data, _ := webFiles.ReadFile("web/index.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(data)
-	})
+	}))
 
 	// Admin API
 	aa := func(h http.HandlerFunc) http.HandlerFunc { return adminAuth(cfg.AdminToken, h) }
@@ -118,7 +127,7 @@ func buildTLSConfig(cfg *config.Config) (*tls.Config, error) {
 	}
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS13,
 	}, nil
 }
 
@@ -143,12 +152,18 @@ func loadOrGenerateSelfSigned(cfg *config.Config) (tls.Certificate, error) {
 		sans = append(sans, cfg.ServerName)
 	}
 
+	serialBytes := make([]byte, 16)
+	if _, err := rand.Read(serialBytes); err != nil {
+		return tls.Certificate{}, fmt.Errorf("generating serial: %w", err)
+	}
+	serial := new(big.Int).SetBytes(serialBytes)
+
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: cfg.ServerName},
 		DNSNames:     sans,
 		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
+		NotAfter:     time.Now().Add(2 * 365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -177,6 +192,24 @@ func loadOrGenerateSelfSigned(cfg *config.Config) (tls.Certificate, error) {
 }
 
 // --- Helpers ---
+
+// loopbackOnly restricts a handler to connections from 127.0.0.1 / ::1.
+// Use SSH port-forwarding for remote admin access.
+func loopbackOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || (!ip.IsLoopback()) {
+			http.Error(w, "admin UI is only accessible from localhost", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
 
 func adminAuth(token string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
