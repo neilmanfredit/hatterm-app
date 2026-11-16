@@ -5,11 +5,16 @@ services:
     container_name: hattermserver
     restart: unless-stopped
     mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
     environment:
-      HATTERM_LISTEN_ADDR: "0.0.0.0:8443"
+      HATTERM_LISTEN_ADDR: "127.0.0.1:8443"
       HATTERM_DATA_DIR: "/var/lib/hattermserver"
+    env_file:
+      - path: .env
+        required: false
     ports:
-      - "8443:8443"
+      - "${HATTERM_HOST_BIND:-127.0.0.1}:8443:8443"
     volumes:
       - hattermserver_data:/var/lib/hattermserver
 

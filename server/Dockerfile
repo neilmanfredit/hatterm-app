@@ -7,7 +7,6 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /hattermserver ./cmd/ha
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=builder /hattermserver /hattermserver
-VOLUME ["/var/lib/hattermserver"]
 EXPOSE 8443
 ENV HATTERM_DATA_DIR=/var/lib/hattermserver
 ENTRYPOINT ["/hattermserver"]

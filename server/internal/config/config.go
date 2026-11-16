@@ -26,6 +26,9 @@ type Config struct {
 }
 
 func DefaultDataDir() string {
+	if v := os.Getenv("HATTERM_DATA_DIR"); v != "" {
+		return v
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "/var/lib/hattermserver"
@@ -38,7 +41,7 @@ func ConfigPath() string {
 }
 
 // Load reads config.json from DataDir. After loading, environment variable
-// overrides are applied: HATTERM_LISTEN_ADDR, HATTERM_DATA_DIR, HATTERM_SERVER_NAME.
+// overrides are applied: HATTERM_LISTEN_ADDR, HATTERM_DATA_DIR, HATTERM_SERVER_NAME, HATTERM_ADMIN_TOKEN.
 func Load() (*Config, bool, error) {
 	path := ConfigPath()
 	data, err := os.ReadFile(path)
@@ -65,6 +68,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("HATTERM_SERVER_NAME"); v != "" {
 		cfg.ServerName = v
+	}
+	if v := os.Getenv("HATTERM_ADMIN_TOKEN"); v != "" {
+		cfg.AdminToken = v
 	}
 }
 
