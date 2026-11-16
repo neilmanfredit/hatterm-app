@@ -105,8 +105,9 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	log.Printf("hattermserver starting — https://%s%s", resolveHost(cfg), cfg.ListenAddr)
-	log.Printf("admin UI: https://%s%s/admin/", resolveHost(cfg), cfg.ListenAddr)
+	_, port, _ := net.SplitHostPort(cfg.ListenAddr)
+	log.Printf("hattermserver starting — https://%s:%s", resolveHost(cfg), port)
+	log.Printf("admin UI: https://%s:%s/admin/", resolveHost(cfg), port)
 	if err := srv.ListenAndServeTLS("", ""); err != nil {
 		log.Fatal(err)
 	}
